@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>AI Search RAG</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #111;
+    --muted: #666;
+    --line: #e5e5e5;
+    --accent: #111;
+    --error: #b00020;
+    --ok: #0a7c2f;
+    --pending: #bbb;
+    --running: #2a6df4;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 720px; margin: 48px auto; padding: 0 20px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 32px; font-size: 13px; }
+  section { margin-bottom: 32px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  input[type=text], input[type=file], textarea {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--line);
+    background: #fff; border-radius: 6px; font: inherit; color: var(--fg);
+  }
+  textarea { resize: vertical; min-height: 80px; }
+  input[type=text]:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  button {
+    padding: 10px 16px; border: 1px solid var(--accent); background: var(--accent);
+    color: #fff; border-radius: 6px; font: inherit; cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .field { margin-bottom: 12px; }
+  .status { font-size: 13px; margin-top: 8px; min-height: 1.2em; }
+  .status.ok { color: var(--ok); }
+  .status.err { color: var(--error); }
+  .answer { white-space: pre-wrap; padding: 14px; background: #fff;
+    border: 1px solid var(--line); border-radius: 6px; }
+  .sources { margin-top: 12px; display: grid; gap: 8px; }
+  .source { padding: 10px 12px; background: #fff; border: 1px solid var(--line);
+    border-radius: 6px; font-size: 13px; }
+  .source .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 32px 0; }
+
+  /* Pipeline timeline */
+  .pipeline { margin-top: 16px; padding: 16px; background: #fff;
+    border: 1px solid var(--line); border-radius: 8px; }
+  .pipeline.hidden { display: none; }
+  .step { display: grid; grid-template-columns: 24px 1fr auto; gap: 10px;
+    align-items: center; padding: 6px 0; }
+  .step + .step { border-top: 1px dashed #eee; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--pending);
+    margin-left: 2px; transition: background 0.2s; position: relative; }
+  .step.running .dot { background: var(--running); }
+  .step.running .dot::after {
+    content: ""; position: absolute; inset: -4px; border-radius: 50%;
+    border: 2px solid var(--running); opacity: 0.4;
+    animation: pulse 1.2s ease-out infinite;
+  }
+  .step.done .dot { background: var(--ok); }
+  .step.done .dot::before {
+    content: "✓"; color: #fff; font-size: 10px; position: absolute;
+    top: 50%; left: 50%; transform: translate(-50%, -50%); font-weight: 700;
+  }
+  .step.error .dot { background: var(--error); }
+  .step.error .dot::before {
+    content: "!"; color: #fff; font-size: 10px; position: absolute;
+    top: 50%; left: 50%; transform: translate(-50%, -50%); font-weight: 700;
+  }
+  @keyframes pulse {
+    0% { transform: scale(1); opacity: 0.5; }
+    100% { transform: scale(1.8); opacity: 0; }
+  }
+  .step .label { font-size: 14px; }
+  .step .detail { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .step .bar { grid-column: 1 / -1; height: 4px; background: #eee;
+    border-radius: 2px; overflow: hidden; margin-top: 4px; }
+  .step .bar-fill { height: 100%; background: var(--running); width: 0%;
+    transition: width 0.2s linear; }
+  .step.done .bar-fill { background: var(--ok); }
+  .pipeline .summary { font-size: 12px; color: var(--muted);
+    margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line);
+    display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+<main>
+  <h1>AI Search RAG</h1>
+  <p class="sub">Upload a document, then ask questions about it.</p>
+
+  <section>
+    <h2>Tenant</h2>
+    <input id="tenant" type="text" value="demo" />
+  </section>
+
+  <section>
+    <h2>Upload</h2>
+    <div class="field">
+      <input id="file" type="file" accept=".pdf,.txt,application/pdf,text/plain" />
+    </div>
+    <button id="upload-btn">Upload</button>
+    <div id="upload-status" class="status"></div>
+    <div id="pipeline" class="pipeline hidden"></div>
+  </section>
+
+  <hr />
+
+  <section>
+    <h2>Ask</h2>
+    <div class="field">
+      <textarea id="question" placeholder="What is this document about?"></textarea>
+    </div>
+    <button id="ask-btn">Ask</button>
+    <div id="ask-status" class="status"></div>
+  </section>
+
+  <section id="result" hidden>
+    <h2>Answer</h2>
+    <div id="answer" class="answer"></div>
+    <div id="sources" class="sources"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const tenant = () => $("tenant").value.trim() || "demo";
+
+function setStatus(el, text, kind) {
+  el.textContent = text;
+  el.className = "status" + (kind ? " " + kind : "");
+}
+
+const STEPS = [
+  { key: "upload",       label: "Upload file",        bar: true  },
+  { key: "extract_pdf",  label: "Extract PDF text",   bar: false, pdfOnly: true },
+  { key: "ocr",          label: "OCR fallback",       bar: true,  pdfOnly: true, optional: true },
+  { key: "decode",       label: "Decode text",        bar: false, txtOnly: true },
+  { key: "chunk",        label: "Chunk text",         bar: false },
+  { key: "embed",        label: "Embed chunks",       bar: true  },
+  { key: "save",         label: "Save to database",   bar: false },
+];
+
+class Pipeline {
+  constructor(container, fileType) {
+    this.el = container;
+    this.el.innerHTML = "";
+    this.el.classList.remove("hidden");
+    this.steps = {};
+    this.startTime = Date.now();
+    this.summary = document.createElement("div");
+    this.summary.className = "summary";
+    this.summary.innerHTML = `<span id="pl-bytes"></span><span id="pl-elapsed">0.0s</span>`;
+
+    for (const s of STEPS) {
+      if (s.pdfOnly && fileType !== "pdf") continue;
+      if (s.txtOnly && fileType !== "txt") continue;
+      const row = document.createElement("div");
+      row.className = "step";
+      row.innerHTML = `
+        <div class="dot"></div>
+        <div class="label">${s.label}</div>
+        <div class="detail"></div>
+        ${s.bar ? '<div class="bar"><div class="bar-fill"></div></div>' : ""}
+      `;
+      this.el.appendChild(row);
+      this.steps[s.key] = row;
+    }
+    this.el.appendChild(this.summary);
+    this._tick = setInterval(() => this._updateElapsed(), 100);
+  }
+  _updateElapsed() {
+    const s = (Date.now() - this.startTime) / 1000;
+    const el = this.summary.querySelector("#pl-elapsed");
+    if (el) el.textContent = s.toFixed(1) + "s";
+  }
+  start(key, detail = "") {
+    const row = this.steps[key];
+    if (!row) return;
+    row.classList.remove("done", "error");
+    row.classList.add("running");
+    if (detail) row.querySelector(".detail").textContent = detail;
+  }
+  progress(key, pct, detail = "") {
+    const row = this.steps[key];
+    if (!row) return;
+    row.classList.add("running");
+    const fill = row.querySelector(".bar-fill");
+    if (fill) fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+    if (detail) row.querySelector(".detail").textContent = detail;
+  }
+  done(key, detail = "") {
+    const row = this.steps[key];
+    if (!row) return;
+    row.classList.remove("running");
+    row.classList.add("done");
+    const fill = row.querySelector(".bar-fill");
+    if (fill) fill.style.width = "100%";
+    if (detail) row.querySelector(".detail").textContent = detail;
+  }
+  error(key, detail = "") {
+    const row = this.steps[key];
+    if (!row) return;
+    row.classList.remove("running", "done");
+    row.classList.add("error");
+    if (detail) row.querySelector(".detail").textContent = detail;
+  }
+  setBytes(n) {
+    const el = this.summary.querySelector("#pl-bytes");
+    if (el) el.textContent = formatBytes(n);
+  }
+  stop() { clearInterval(this._tick); this._updateElapsed(); }
+}
+
+function formatBytes(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / (1024 * 1024)).toFixed(2) + " MB";
+}
+
+async function streamUpload(file, tenantId, pipeline) {
+  const fd = new FormData();
+  fd.append("tenant_id", tenantId);
+  fd.append("file", file);
+
+  pipeline.start("upload", "0%");
+  pipeline.setBytes(file.size);
+
+  const res = await fetch("/documents/stream", { method: "POST", body: fd });
+  // Browser doesn't expose upload progress for fetch; mark upload done once headers arrive.
+  pipeline.done("upload", formatBytes(file.size));
+
+  if (!res.ok || !res.body) {
+    let txt;
+    try { txt = await res.text(); } catch { txt = res.statusText; }
+    throw new Error(txt || ("HTTP " + res.status));
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let finalEvent = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) !== -1) {
+      const block = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      for (const line of block.split("\n")) {
+        if (!line.startsWith("data: ")) continue;
+        const ev = JSON.parse(line.slice(6));
+        finalEvent = handleEvent(ev, pipeline) || finalEvent;
+      }
+    }
+  }
+  return finalEvent;
+}
+
+function handleEvent(ev, pl) {
+  switch (ev.type) {
+    case "received":
+      pl.setBytes(ev.bytes);
+      return null;
+    case "phase":
+      pl.start(ev.name, "");
+      return null;
+    case "extracted_pypdf":
+      if (ev.chars > 0) pl.done("extract_pdf", ev.chars + " chars");
+      else pl.done("extract_pdf", "no text — OCR needed");
+      return null;
+    case "ocr_start":
+      pl.start("ocr", "0 / " + ev.pages);
+      pl.progress("ocr", 0, "0 / " + ev.pages);
+      return null;
+    case "ocr_page":
+      pl.progress("ocr", (ev.page / ev.total) * 100, ev.page + " / " + ev.total);
+      if (ev.page === ev.total) pl.done("ocr", ev.total + " pages");
+      return null;
+    case "extracted":
+      // chunking phase comes next
+      return null;
+    case "chunked":
+      pl.done("chunk", ev.count + " chunks");
+      return null;
+    case "embedded_batch":
+      pl.progress("embed", (ev.chunks_done / ev.chunks_total) * 100,
+        ev.chunks_done + " / " + ev.chunks_total);
+      if (ev.chunks_done === ev.chunks_total) pl.done("embed", ev.chunks_total + " chunks");
+      return null;
+    case "done":
+      pl.done("save", "doc #" + ev.document_id);
+      return ev;
+    case "error":
+      // mark whichever step is currently running as error
+      for (const key in pl.steps) {
+        if (pl.steps[key].classList.contains("running")) {
+          pl.error(key, ev.detail);
+          return null;
+        }
+      }
+      pl.error(Object.keys(pl.steps)[0], ev.detail);
+      return { error: ev.detail };
+  }
+  return null;
+}
+
+$("upload-btn").addEventListener("click", async () => {
+  const f = $("file").files[0];
+  const status = $("upload-status");
+  if (!f) { setStatus(status, "Pick a file first.", "err"); return; }
+
+  const fileType = f.name.toLowerCase().endsWith(".pdf") ? "pdf" : "txt";
+  const pipeline = new Pipeline($("pipeline"), fileType);
+  setStatus(status, "");
+  $("upload-btn").disabled = true;
+
+  try {
+    const result = await streamUpload(f, tenant(), pipeline);
+    if (result && result.error) {
+      setStatus(status, "Failed: " + result.error, "err");
+    } else if (result) {
+      setStatus(status, `Indexed ${result.filename} — ${result.chunk_count} chunks.`, "ok");
+    } else {
+      setStatus(status, "Stream ended without completion.", "err");
+    }
+  } catch (e) {
+    setStatus(status, "Failed: " + e.message, "err");
+  } finally {
+    pipeline.stop();
+    $("upload-btn").disabled = false;
+  }
+});
+
+$("ask-btn").addEventListener("click", async () => {
+  const q = $("question").value.trim();
+  const status = $("ask-status");
+  const result = $("result");
+  if (!q) { setStatus(status, "Enter a question.", "err"); return; }
+  setStatus(status, "Thinking…");
+  $("ask-btn").disabled = true;
+  result.hidden = true;
+  try {
+    const res = await fetch("/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tenant_id: tenant(), question: q, top_k: 5 }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.detail || res.statusText);
+    $("answer").textContent = body.answer;
+    $("sources").innerHTML = "";
+    (body.sources || []).forEach((s) => {
+      const div = document.createElement("div");
+      div.className = "source";
+      div.innerHTML = `
+        <div class="meta">${escapeHtml(s.filename)} · chunk ${s.chunk_index} · score ${s.score.toFixed(3)}</div>
+        <div class="excerpt">${escapeHtml(s.excerpt)}</div>`;
+      $("sources").appendChild(div);
+    });
+    result.hidden = false;
+    setStatus(status, "");
+  } catch (e) {
+    setStatus(status, "Failed: " + e.message, "err");
+  } finally {
+    $("ask-btn").disabled = false;
+  }
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+$("question").addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") $("ask-btn").click();
+});
+</script>
+</body>
+</html>

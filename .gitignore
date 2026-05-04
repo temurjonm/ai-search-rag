@@ -1,0 +1,38 @@
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+src/*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Uploaded user data — keep dir, drop contents
+storage/*
+!storage/.gitkeep
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
